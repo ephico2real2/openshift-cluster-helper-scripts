@@ -1,3 +1,5 @@
+To check the CPU and memory resources for nodes with specific labels in an OpenShift cluster, I modify our approach slightly to target the correct node labels. 
+
 ```bash
 cat << 'EOF' > get_all_node_resources.sh
 #!/bin/bash
@@ -101,5 +103,21 @@ chmod +x get_all_node_resources.sh
 
 # Run the script
 ./get_all_node_resources.sh
+```
 
+This script will:
+
+1. Check resources for master nodes (with the master label)
+2. Check resources for infrastructure nodes (with both infra and worker labels)
+3. Check resources for application nodes (with both app and worker labels)
+4. Display a summary of total cluster resources
+
+You can also run specific queries for just the app nodes using:
+
+```bash
+# Get app nodes specifically
+oc get nodes -l node-role.kubernetes.io/app,node-role.kubernetes.io/worker -o custom-columns=NAME:.metadata.name,CPU:.status.capacity.cpu,MEMORY:.status.capacity.memory
+
+# Get total CPU for app nodes
+oc get nodes -l node-role.kubernetes.io/app,node-role.kubernetes.io/worker -o jsonpath='{range .items[*]}{.status.capacity.cpu}{"\n"}{end}' | awk '{sum+=$1} END {print "Total App Node CPU cores:", sum}'
 ```
