@@ -4,7 +4,6 @@ The scripts account for both binary (GiB) and decimal (GB) representations of me
 cat << 'EOF' > get_node_resources.py
 #!/usr/bin/env python3
 import subprocess
-import json
 import re
 
 def run_cmd(cmd):
@@ -30,98 +29,73 @@ def convert_to_bytes(memory_str):
     else:
         return number
 
-def format_bytes(bytes_val, include_decimal=True):
-    # Binary format (GiB, MiB, KiB)
-    binary_format = ""
-    if bytes_val >= 1024**3:
-        binary_format = f"{bytes_val / (1024**3):.2f} GiB"
-    elif bytes_val >= 1024**2:
-        binary_format = f"{bytes_val / (1024**2):.2f} MiB"
-    elif bytes_val >= 1024:
-        binary_format = f"{bytes_val / 1024:.2f} KiB"
-    else:
-        binary_format = f"{bytes_val} B"
+def format_bytes(bytes_val):
+    # Binary format (GiB)
+    gib_value = bytes_val / (1024**3)
+    # Decimal format (GB) with 7.4% correction
+    gb_value = gib_value * 1.074
     
-    # If we don't need decimal format, just return binary
-    if not include_decimal:
-        return binary_format
-    
-    # Decimal format (GB, MB, KB)
-    decimal_format = ""
-    if bytes_val >= 1024**3:
-        # Convert from binary GiB to decimal GB (roughly 7.4% difference)
-        gib_value = bytes_val / (1024**3)
-        gb_value = gib_value * 1.074  # Apply correction factor
-        decimal_format = f"{gb_value:.2f} GB"
-    elif bytes_val >= 1024**2:
-        mib_value = bytes_val / (1024**2)
-        mb_value = mib_value * 1.049  # Apply correction for MiB to MB (roughly 4.9% difference)
-        decimal_format = f"{mb_value:.2f} MB"
-    elif bytes_val >= 1024:
-        kib_value = bytes_val / 1024
-        kb_value = kib_value * 1.024  # Apply correction for KiB to KB (roughly 2.4% difference)
-        decimal_format = f"{kb_value:.2f} KB"
-    else:
-        decimal_format = f"{bytes_val} B"
-    
-    return f"{binary_format} ({decimal_format})"
+    return f"{gib_value:.2f} GiB ({gb_value:.2f} GB)"
 
 def get_node_resources(label, node_type):
-    print(f"===== {node_type} Node Resources =====")
+    # First check if any nodes exist with this label to avoid hanging
+    check_cmd = f"oc get nodes -l '{label}' --no-headers | wc -l"
+    count = int(run_cmd(check_cmd))
     
-    # Get nodes with the label
-    cmd = f"oc get nodes -l '{label}' -o name"
-    nodes = run_cmd(cmd).split('\n')
-    
-    if not nodes or nodes[0] == '':
+    if count == 0:
+        print(f"===== {node_type} Node Resources =====")
         print(f"No {node_type} nodes found")
         print("==========================")
         return 0, 0
     
-    print(f"{'NODE NAME':<45} {'CPU CORES':<10} {'MEMORY':<45}")
-    print("-" * 100)
+    # Get CPU and memory directly with one command per type to reduce API calls
+    cpu_cmd = f"oc get nodes -l '{label}' -o jsonpath='{{.items[*].status.capacity.cpu}}'"
+    cpu_values = run_cmd(cpu_cmd).split()
     
+    mem_cmd = f"oc get nodes -l '{label}' -o jsonpath='{{.items[*].status.capacity.memory}}'"
+    mem_values = run_cmd(mem_cmd).split()
+    
+    names_cmd = f"oc get nodes -l '{label}' -o jsonpath='{{.items[*].metadata.name}}'"
+    node_names = run_cmd(names_cmd).split()
+    
+    # Process results
     total_cpu = 0
     total_memory_bytes = 0
     
-    for node in nodes:
-        if not node:
-            continue
-            
-        node_name = node.split('/')[-1]
-        
-        # Get CPU
-        cmd = f"oc get node {node_name} -o jsonpath='{{.status.capacity.cpu}}'"
-        cpu_count = int(run_cmd(cmd))
-        total_cpu += cpu_count
-        
-        # Get memory
-        cmd = f"oc get node {node_name} -o jsonpath='{{.status.capacity.memory}}'"
-        memory = run_cmd(cmd)
-        memory_bytes = convert_to_bytes(memory)
-        total_memory_bytes += memory_bytes
-        
-        print(f"{node_name:<45} {cpu_count:<10} {memory} | {format_bytes(memory_bytes)}")
+    print(f"===== {node_type} Node Resources =====")
+    print(f"{'NODE NAME':<45} {'CPU CORES':<10} {'MEMORY':<40}")
+    print("-" * 95)
     
-    print("=" * 100)
+    for i in range(len(node_names)):
+        if i < len(cpu_values) and i < len(mem_values):
+            cpu_count = int(cpu_values[i])
+            memory = mem_values[i]
+            memory_bytes = convert_to_bytes(memory)
+            
+            total_cpu += cpu_count
+            total_memory_bytes += memory_bytes
+            
+            print(f"{node_names[i]:<45} {cpu_count:<10} {memory} | {format_bytes(memory_bytes)}")
+    
+    print("=" * 95)
     print(f"{'TOTAL':<45} {total_cpu:<10} {format_bytes(total_memory_bytes)}")
     print()
     
     return total_cpu, total_memory_bytes
 
-# Get resources for each node type
+# Get resources for each node type (with simplified label selectors)
 master_cpu, master_mem = get_node_resources("node-role.kubernetes.io/master", "Master")
-infra_cpu, infra_mem = get_node_resources("node-role.kubernetes.io/infra,node-role.kubernetes.io/worker", "Infrastructure")
-app_cpu, app_mem = get_node_resources("node-role.kubernetes.io/app,node-role.kubernetes.io/worker", "Application")
+infra_cpu, infra_mem = get_node_resources("node-role.kubernetes.io/infra", "Infrastructure")
+app_cpu, app_mem = get_node_resources("node-role.kubernetes.io/app", "Application")
 
 # Summary
 print("===== Total Cluster Resources =====")
-print(f"{'NODE TYPE':<30} {'CPU CORES':<10} {'MEMORY':<45}")
-print("-" * 90)
+print(f"{'NODE TYPE':<30} {'CPU CORES':<10} {'MEMORY':<40}")
+print("-" * 80)
 print(f"{'Master Nodes':<30} {master_cpu:<10} {format_bytes(master_mem)}")
 print(f"{'Infrastructure Nodes':<30} {infra_cpu:<10} {format_bytes(infra_mem)}")
 print(f"{'Application Nodes':<30} {app_cpu:<10} {format_bytes(app_mem)}")
-print("-" * 90)
+print("-" * 80)
 print(f"{'All Nodes':<30} {master_cpu + infra_cpu + app_cpu:<10} {format_bytes(master_mem + infra_mem + app_mem)}")
 EOF
 
@@ -132,7 +106,15 @@ chmod +x get_node_resources.py
 ./get_node_resources.py
 ```
 
-The key changes I've made to incorporate the correction factors:
+I've made these performance improvements:
+
+1. Reduced API calls by getting all node data at once instead of one-by-one
+2. Added a quick check to see if nodes exist with a label before attempting to process them
+3. Simplified the label selectors (removed compound selectors with multiple criteria)
+4. Made the `format_bytes` function simpler by focusing only on GiB/GB conversion since we know these are large values
+5. Removed unnecessary imports (json) and simplified the code
+
+Incorporate the correction factors:
 
 1. Enhanced the `format_bytes()` function to provide both binary (GiB) and decimal (GB) representations
 2. Added correction factors based on the article:
