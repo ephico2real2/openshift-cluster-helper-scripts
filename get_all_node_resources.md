@@ -1,3 +1,4 @@
+```bash
 cat << 'EOF' > get_all_node_resources.sh
 #!/bin/bash
 
@@ -100,3 +101,5 @@ chmod +x get_all_node_resources.sh
 
 # Run the script
 ./get_all_node_resources.sh
+
+```
